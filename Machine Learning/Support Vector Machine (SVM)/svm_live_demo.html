@@ -1,0 +1,242 @@
+
+<style>
+  .svm-wrap { padding: 1rem 0; font-family: var(--font-sans); }
+  canvas#svm { border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); background: var(--color-background-primary); width: 100%; cursor: crosshair; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 8px; align-items: center; }
+  .controls button { font-size: 13px; padding: 5px 14px; border-radius: var(--border-radius-md); border: 0.5px solid var(--color-border-secondary); background: var(--color-background-primary); color: var(--color-text-primary); cursor: pointer; }
+  .controls button:hover { background: var(--color-background-secondary); }
+  .controls button.active { background: var(--color-background-info); color: var(--color-text-info); border-color: var(--color-border-info); }
+  .legend { display: flex; gap: 20px; font-size: 13px; color: var(--color-text-secondary); margin-top: 8px; flex-wrap: wrap; }
+  .legend span { display: flex; align-items: center; gap: 6px; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+  .info-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+  .metric { background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 10px 12px; }
+  .metric .label { font-size: 11px; color: var(--color-text-secondary); margin-bottom: 4px; }
+  .metric .val { font-size: 20px; font-weight: 500; color: var(--color-text-primary); }
+  .hint { font-size: 12px; color: var(--color-text-tertiary); margin-top: 6px; }
+</style>
+
+<div class="svm-wrap">
+  <div class="controls">
+    <button id="btnA" class="active" onclick="setMode('A')">+ Class A</button>
+    <button id="btnB" onclick="setMode('B')">+ Class B</button>
+    <button onclick="reset()">Reset</button>
+    <button onclick="loadExample()">Load example</button>
+  </div>
+
+  <canvas id="svm" height="360"></canvas>
+
+  <div class="legend">
+    <span><span class="dot" style="background:#378ADD;border:2px solid #185FA5"></span>Class A</span>
+    <span><span class="dot" style="background:#E24B4A;border:2px solid #A32D2D"></span>Class B</span>
+    <span><span class="dot" style="background:#378ADD;border:2px solid #185FA5;outline:2px solid #378ADD;outline-offset:3px"></span>Support vectors</span>
+    <span style="display:flex;align-items:center;gap:6px"><span style="width:28px;height:3px;background:#3B6D11;display:inline-block;border-radius:2px"></span>Decision boundary</span>
+    <span style="display:flex;align-items:center;gap:6px"><span style="width:28px;height:2px;background:#639922;display:inline-block;border-radius:2px;opacity:.6;border-top:1px dashed #639922"></span>Margin</span>
+  </div>
+
+  <div class="info-row">
+    <div class="metric"><div class="label">Margin width</div><div class="val" id="mMargin">—</div></div>
+    <div class="metric"><div class="label">Support vectors</div><div class="val" id="mSV">—</div></div>
+    <div class="metric"><div class="label">Points</div><div class="val" id="mPts">0</div></div>
+  </div>
+  <div class="hint" id="hint">Click on canvas to add points. Add at least 2 of each class, then the SVM updates live.</div>
+</div>
+
+<script>
+const canvas = document.getElementById('svm');
+const ctx = canvas.getContext('2d');
+let mode = 'A';
+let points = [];
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('btnA').classList.toggle('active', m === 'A');
+  document.getElementById('btnB').classList.toggle('active', m === 'B');
+}
+
+function reset() {
+  points = [];
+  draw();
+  document.getElementById('mMargin').textContent = '—';
+  document.getElementById('mSV').textContent = '—';
+  document.getElementById('mPts').textContent = '0';
+  document.getElementById('hint').textContent = 'Click on canvas to add points. Add at least 2 of each class, then the SVM updates live.';
+}
+
+function loadExample() {
+  points = [];
+  const As = [[120,100],[140,130],[100,150],[160,110],[130,170],[110,80],[150,160],[90,120]];
+  const Bs = [[320,200],[350,230],[300,250],[370,210],[340,270],[360,180],[310,260],[380,240]];
+  As.forEach(p => points.push({x: p[0], y: p[1], cls: 1}));
+  Bs.forEach(p => points.push({x: p[0], y: p[1], cls: -1}));
+  draw();
+}
+
+canvas.addEventListener('click', e => {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const x = (e.clientX - rect.left) * scaleX;
+  const y = (e.clientY - rect.top) * scaleY;
+  points.push({x, y, cls: mode === 'A' ? 1 : -1});
+  draw();
+});
+
+function solveSVM(pts) {
+  const A = pts.filter(p => p.cls === 1);
+  const B = pts.filter(p => p.cls === -1);
+  if (A.length < 1 || B.length < 1) return null;
+
+  let bestW = null, bestB = 0, bestMargin = -1, bestSVs = [];
+
+  const angles = 360;
+  for (let a = 0; a < angles; a++) {
+    const theta = (a / angles) * Math.PI;
+    const wx = Math.cos(theta), wy = Math.sin(theta);
+
+    const projA = A.map(p => p.x * wx + p.y * wy);
+    const projB = B.map(p => p.x * wx + p.y * wy);
+    const minA = Math.min(...projA), maxB = Math.max(...projB);
+    const maxA = Math.max(...projA), minB = Math.min(...projB);
+
+    let margin, midpoint, sv1, sv2;
+    if (minA > maxB) {
+      margin = minA - maxB;
+      midpoint = (minA + maxB) / 2;
+      sv1 = A.filter(p => Math.abs(p.x * wx + p.y * wy - minA) < 1.5);
+      sv2 = B.filter(p => Math.abs(p.x * wx + p.y * wy - maxB) < 1.5);
+    } else if (minB > maxA) {
+      margin = minB - maxA;
+      midpoint = (minB + maxA) / 2;
+      sv1 = B.filter(p => Math.abs(p.x * wx + p.y * wy - minB) < 1.5);
+      sv2 = A.filter(p => Math.abs(p.x * wx + p.y * wy - maxA) < 1.5);
+    } else continue;
+
+    if (margin > bestMargin) {
+      bestMargin = margin;
+      bestW = {wx, wy};
+      bestB = -midpoint;
+      bestSVs = [...sv1, ...sv2];
+    }
+  }
+
+  if (!bestW) return null;
+  return {wx: bestW.wx, wy: bestW.wy, b: bestB, margin: bestMargin, svs: bestSVs};
+}
+
+function drawLine(wx, wy, offset, color, dash, width) {
+  const W = canvas.width, H = canvas.height;
+  ctx.beginPath();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width || 1.5;
+  if (dash) ctx.setLineDash(dash); else ctx.setLineDash([]);
+
+  const perp_x = -wy, perp_y = wx;
+  const cx = -offset * wx, cy = -offset * wy;
+
+  let t1, t2;
+  if (Math.abs(perp_x) > 0.01) {
+    const t_left = (0 - cx) / perp_x;
+    const t_right = (W - cx) / perp_x;
+    t1 = Math.min(t_left, t_right);
+    t2 = Math.max(t_left, t_right);
+  } else {
+    t1 = (0 - cy) / perp_y;
+    t2 = (H - cy) / perp_y;
+  }
+
+  const x1 = cx + t1 * perp_x, y1 = cy + t1 * perp_y;
+  const x2 = cx + t2 * perp_x, y2 = cy + t2 * perp_y;
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+function draw() {
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const gridColor = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)';
+
+  ctx.strokeStyle = gridColor;
+  ctx.lineWidth = 1;
+  for (let x = 0; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+  for (let y = 0; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+
+  const svm = points.length >= 4 ? solveSVM(points) : null;
+
+  if (svm) {
+    const {wx, wy, b, margin} = svm;
+    const halfM = margin / 2;
+
+    const marginFill = isDark ? 'rgba(99,153,34,0.08)' : 'rgba(99,153,34,0.07)';
+    const W2 = canvas.width, H2 = canvas.height;
+    ctx.save();
+    ctx.beginPath();
+    const perp_x = -wy, perp_y = wx;
+    const cx1 = (-b + halfM) * wx, cy1 = (-b + halfM) * wy;
+    const cx2 = (-b - halfM) * wx, cy2 = (-b - halfM) * wy;
+    const bigT = Math.max(W2, H2) * 3;
+    ctx.moveTo(cx1 + (-bigT) * perp_x, cy1 + (-bigT) * perp_y);
+    ctx.lineTo(cx1 + bigT * perp_x, cy1 + bigT * perp_y);
+    ctx.lineTo(cx2 + bigT * perp_x, cy2 + bigT * perp_y);
+    ctx.lineTo(cx2 + (-bigT) * perp_x, cy2 + (-bigT) * perp_y);
+    ctx.closePath();
+    ctx.fillStyle = marginFill;
+    ctx.fill();
+    ctx.restore();
+
+    drawLine(wx, wy, -b + halfM, isDark ? '#639922' : '#639922', [6, 4], 1.5);
+    drawLine(wx, wy, -b - halfM, isDark ? '#639922' : '#639922', [6, 4], 1.5);
+    drawLine(wx, wy, -b, isDark ? '#1D9E75' : '#1D9E75', null, 2.5);
+
+    const svSet = new Set(svm.svs.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`));
+
+    const marginPx = Math.round(margin);
+    document.getElementById('mMargin').textContent = marginPx + 'px';
+    document.getElementById('mSV').textContent = svm.svs.length;
+    document.getElementById('hint').textContent = 'The green band is the margin — SVM maximizes this gap. Circled points are support vectors.';
+
+    points.forEach(p => {
+      const isSV = svSet.has(`${p.x.toFixed(1)},${p.y.toFixed(1)}`);
+      const isA = p.cls === 1;
+      const fill = isA ? '#378ADD' : '#E24B4A';
+      const stroke = isA ? '#185FA5' : '#A32D2D';
+
+      if (isSV) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 11, 0, Math.PI * 2);
+        ctx.strokeStyle = fill;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([]);
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+      ctx.fillStyle = fill;
+      ctx.fill();
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([]);
+      ctx.stroke();
+    });
+  } else {
+    points.forEach(p => {
+      const isA = p.cls === 1;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+      ctx.fillStyle = isA ? '#378ADD' : '#E24B4A';
+      ctx.fill();
+      ctx.strokeStyle = isA ? '#185FA5' : '#A32D2D';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    });
+  }
+
+  document.getElementById('mPts').textContent = points.length;
+}
+
+draw();
+</script>
